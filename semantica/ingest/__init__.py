@@ -251,6 +251,10 @@ _LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
     "RedshiftIngestor": (".redshift_ingestor", "RedshiftIngestor"),
     "RedshiftData": (".redshift_ingestor", "RedshiftData"),
     "RedshiftConnector": (".redshift_ingestor", "RedshiftConnector"),
+    # Cassandra ingestion
+    "CassandraIngestor": (".cassandra_ingestor", "CassandraIngestor"),
+    "CassandraData": (".cassandra_ingestor", "CassandraData"),
+    "CassandraConnector": (".cassandra_ingestor", "CassandraConnector"),
 }
 
 _OPTIONAL_DEPENDENCY_MESSAGES = {
@@ -297,6 +301,10 @@ _OPTIONAL_DEPENDENCY_MESSAGES = {
         "Redshift ingestion requires optional dependency 'redshift-connector'. "
         "Install it with: pip install 'semantica[db-redshift]'"
     ),
+    ".cassandra_ingestor": (
+        "Cassandra ingestion requires optional dependency 'cassandra-driver'. "
+        "Install it with: pip install 'semantica[db-cassandra]'"
+    ),
 }
 
 
@@ -322,6 +330,7 @@ def __getattr__(name: str) -> Any:
                     "simple_salesforce",
                     "lxml",
                     "redshift_connector",
+                    "cassandra",
                 )
             )
         ):
