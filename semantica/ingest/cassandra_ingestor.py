@@ -69,6 +69,9 @@ class CassandraConnector:
 
     def connect(self):
         """Connect to Cassandra and return the session."""
+        if self.session is not None:
+            return self.session
+
         try:
             from cassandra.cluster import Cluster
 
@@ -141,6 +144,16 @@ class CassandraConnector:
         finally:
             self.disconnect()
 
+def _validate_identifier(value: str, name: str) -> str:
+    """Validate a Cassandra keyspace or table identifier."""
+    if (
+        not value
+        or value[0].isdigit()
+        or not all(char.isalnum() or char == "_" for char in value)
+    ):
+        raise ValidationError(f"Invalid Cassandra {name}: {value}")
+    return value
+
 class CassandraIngestor:
     """Cassandra data ingestion handler."""
 
@@ -172,18 +185,22 @@ class CassandraIngestor:
         table_name: str,
         keyspace: Optional[str] = None,
     ) -> Dict[str, Any]:
-         """Get schema information for a Cassandra table."""
+        """Get schema information for a Cassandra table."""
+        keyspace = keyspace or self.keyspace
 
-         keyspace = keyspace or self.keyspace
-
-         if not keyspace:
+        if not keyspace:
             raise ValueError("keyspace is required")
 
-         try:
-            # Make sure the connector has been connected so metadata is available.
-            self.connector.connect()
+        _validate_identifier(keyspace, "keyspace")
+        _validate_identifier(table_name, "table name")
 
-            keyspace_metadata = self.connector.cluster.metadata.keyspaces.get(keyspace)
+        try:
+            if self.connector.cluster is None:
+                self.connector.connect()
+
+            keyspace_metadata = self.connector.cluster.metadata.keyspaces.get(
+                keyspace
+            )
 
             if keyspace_metadata is None:
                 raise ValidationError(f"Keyspace not found: {keyspace}")
@@ -192,40 +209,40 @@ class CassandraIngestor:
 
             if table_metadata is None:
                 raise ValidationError(
-                   f"Table not found: {keyspace}.{table_name}"
+                    f"Table not found: {keyspace}.{table_name}"
                 )
 
             primary_key_names = {
                 column.name for column in table_metadata.primary_key
             }
 
-            columns = []
-
-            for column in table_metadata.columns.values():
-                columns.append(
-                    {
-                        "name": column.name,
-                        "type": str(column.cql_type),
-                        "nullable": column.name not in primary_key_names,
-                        "primary_key": column.name in primary_key_names,
-                        "static": column.is_static,
-                    }
-                )
+            columns = [
+                {
+                    "name": column.name,
+                    "type": str(column.cql_type),
+                    "nullable": column.name not in primary_key_names,
+                    "primary_key": column.name in primary_key_names,
+                    "static": column.is_static,
+                }
+                for column in table_metadata.columns.values()
+            ]
 
             return {
                 "columns": columns,
-                "primary_keys": [column.name for column in table_metadata.primary_key],
+                "primary_keys": [
+                    column.name for column in table_metadata.primary_key
+                ],
             }
 
-         except (ValidationError, ProcessingError):
+        except (ValidationError, ProcessingError):
             raise
-         except Exception as exc:
+        except Exception as exc:
             self.logger.error(
                 "Failed to get Cassandra table schema: %s",
                 type(exc).__name__,
             )
             raise ProcessingError(
-                 f"Failed to get Cassandra table schema: {type(exc).__name__}"
+                f"Failed to get Cassandra table schema: {type(exc).__name__}"
             ) from exc
 
     def ingest_table(
@@ -235,11 +252,13 @@ class CassandraIngestor:
         limit: Optional[int] = None,
     ) -> CassandraData:
         """Ingest rows and schema information from a Cassandra table."""
-
         keyspace = keyspace or self.keyspace
 
         if not keyspace:
             raise ValueError("keyspace is required")
+
+        _validate_identifier(keyspace, "keyspace")
+        _validate_identifier(table_name, "table name")
 
         session = self.connector.connect()
 
@@ -258,7 +277,10 @@ class CassandraIngestor:
 
             result = session.execute(query)
 
-            rows = [dict(row._asdict()) if hasattr(row, "_asdict") else dict(row) for row in result]
+            rows = [
+                dict(row._asdict()) if hasattr(row, "_asdict") else dict(row)
+                for row in result
+            ]
 
             return CassandraData(
                 data=rows,
@@ -278,3 +300,46 @@ class CassandraIngestor:
             raise ProcessingError(
                 f"Failed to ingest Cassandra table: {type(exc).__name__}"
             ) from exc
+
+    def export_as_documents(
+        self,
+        data: CassandraData,
+        id_field: str = "id",
+        text_fields: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Convert Cassandra rows to Semantica document dictionaries."""
+        documents = []
+
+        for idx, row in enumerate(data.data):
+            doc = {
+                "id": str(row.get(id_field, idx)),
+                "metadata": {
+                    "source": "cassandra",
+                    "keyspace": data.keyspace,
+                    "table": data.table_name,
+                    "row_data": row,
+                },
+            }
+
+            if text_fields:
+                text_parts = [
+                    str(row[field_name])
+                    for field_name in text_fields
+                    if field_name in row and row[field_name] is not None
+                ]
+            else:
+                text_parts = [
+                    str(value)
+                    for value in row.values()
+                    if isinstance(value, str)
+                ]
+
+            doc["text"] = " ".join(text_parts)
+            documents.append(doc)
+
+        self.logger.debug(
+            "Exported %d Cassandra documents",
+            len(documents),
+        )
+
+        return documents
