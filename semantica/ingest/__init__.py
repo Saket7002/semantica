@@ -133,6 +133,11 @@ import importlib
 from typing import TYPE_CHECKING, Any, Dict, Tuple
 
 if TYPE_CHECKING:
+    from .powerbi_ingestor import (
+        PowerBIConnector,
+        PowerBIData,
+        PowerBIIngestor,
+    )
     from .salesforce_ingestor import (
         SalesforceConnector,
         SalesforceData,
@@ -255,6 +260,10 @@ _LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
     "CassandraIngestor": (".cassandra_ingestor", "CassandraIngestor"),
     "CassandraData": (".cassandra_ingestor", "CassandraData"),
     "CassandraConnector": (".cassandra_ingestor", "CassandraConnector"),
+    # Power BI ingestion
+    "PowerBIIngestor": (".powerbi_ingestor", "PowerBIIngestor"),
+    "PowerBIData": (".powerbi_ingestor", "PowerBIData"),
+    "PowerBIConnector": (".powerbi_ingestor", "PowerBIConnector"),
 }
 
 _OPTIONAL_DEPENDENCY_MESSAGES = {
@@ -476,6 +485,10 @@ __all__ = [
     "RedshiftIngestor",
     "RedshiftData",
     "RedshiftConnector",
+    # Power BI ingestion
+    "PowerBIIngestor",
+    "PowerBIData",
+    "PowerBIConnector",
     # Registry and Methods
     "MethodRegistry",
     "method_registry",
