@@ -8,17 +8,17 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from ..utils.exceptions import ProcessingError
+from ..utils.exceptions import ProcessingError, ValidationError
 from ..utils.logging import get_logger
 
 
 try:
+    import cassandra
     from cassandra.auth import PlainTextAuthProvider
-    from cassandra.cluster import Cluster
 
     CASSANDRA_AVAILABLE = True
 except (ImportError, OSError):
-    Cluster = None
+    cassandra = None
     PlainTextAuthProvider = None
     CASSANDRA_AVAILABLE = False
 
@@ -70,6 +70,8 @@ class CassandraConnector:
     def connect(self):
         """Connect to Cassandra and return the session."""
         try:
+            from cassandra.cluster import Cluster
+
             auth_provider = None
 
             if self.username and self.password:
@@ -164,6 +166,67 @@ class CassandraIngestor:
         )
 
         self.keyspace = keyspace or self.connector.keyspace
+
+    def get_table_schema(
+        self,
+        table_name: str,
+        keyspace: Optional[str] = None,
+    ) -> Dict[str, Any]:
+         """Get schema information for a Cassandra table."""
+
+         keyspace = keyspace or self.keyspace
+
+         if not keyspace:
+            raise ValueError("keyspace is required")
+
+         try:
+            # Make sure the connector has been connected so metadata is available.
+            self.connector.connect()
+
+            keyspace_metadata = self.connector.cluster.metadata.keyspaces.get(keyspace)
+
+            if keyspace_metadata is None:
+                raise ValidationError(f"Keyspace not found: {keyspace}")
+
+            table_metadata = keyspace_metadata.tables.get(table_name)
+
+            if table_metadata is None:
+                raise ValidationError(
+                   f"Table not found: {keyspace}.{table_name}"
+                )
+
+            primary_key_names = {
+                column.name for column in table_metadata.primary_key
+            }
+
+            columns = []
+
+            for column in table_metadata.columns.values():
+                columns.append(
+                    {
+                        "name": column.name,
+                        "type": str(column.cql_type),
+                        "nullable": column.name not in primary_key_names,
+                        "primary_key": column.name in primary_key_names,
+                        "static": column.is_static,
+                    }
+                )
+
+            return {
+                "columns": columns,
+                "primary_keys": [column.name for column in table_metadata.primary_key],
+            }
+
+         except (ValidationError, ProcessingError):
+            raise
+         except Exception as exc:
+            self.logger.error(
+                "Failed to get Cassandra table schema: %s",
+                type(exc).__name__,
+            )
+            raise ProcessingError(
+                 f"Failed to get Cassandra table schema: {type(exc).__name__}"
+            ) from exc
 
     def ingest_table(
         self,
