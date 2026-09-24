@@ -23,10 +23,11 @@ License: MIT
 """
 
 import mimetypes
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ..utils.constants import (
     FILE_SIZE_LIMITS,
@@ -35,7 +36,7 @@ from ..utils.constants import (
     SUPPORTED_IMAGE_FORMATS,
     SUPPORTED_VIDEO_FORMATS,
 )
-from ..utils.exceptions import ProcessingError, ValidationError
+from ..utils.exceptions import PartialIngestionWarning, ProcessingError, ValidationError
 from ..utils.logging import get_logger
 from ..utils.progress_tracker import get_progress_tracker
 
@@ -473,13 +474,30 @@ class FileIngestor:
         """
         Ingest all files from a directory.
 
+        When ``fail_fast=False`` (the default) and one or more files cannot be
+        processed, the successfully ingested files are still returned and a
+        :class:`~semantica.utils.exceptions.PartialIngestionWarning` is emitted
+        so callers are not silently handed an incomplete result.  Use
+        ``warnings.catch_warnings()`` to capture or suppress it programmatically.
+
+        When ``fail_fast=True``, the first per-file failure raises a
+        :class:`~semantica.utils.exceptions.ProcessingError` immediately.
+
         Args:
             directory_path: Path to directory
-            recursive: Whether to scan subdirectories
-            **filters: File filtering criteria
+            recursive: Whether to scan subdirectories (default: True)
+            **filters: File filtering criteria (see :meth:`scan_directory`)
 
         Returns:
-            list: List of ingested file objects
+            list: List of successfully ingested file objects.  May be a subset
+            of the discovered files if some failed and ``fail_fast=False``.
+
+        Raises:
+            ValidationError: If *directory_path* does not exist or is not a directory.
+            ProcessingError: If a per-file failure occurs and ``fail_fast=True``.
+
+        Warns:
+            PartialIngestionWarning: If any files failed and ``fail_fast=False``.
         """
         directory_path = Path(directory_path)
 
@@ -503,7 +521,8 @@ class FileIngestor:
             files = self.scan_directory(directory_path, recursive=recursive, **filters)
 
             # Process each file
-            file_objects = []
+            file_objects: List[FileObject] = []
+            failed_files: List[Tuple[str, Exception]] = []
             total_files = len(files)
 
             self.progress_tracker.update_tracking(
@@ -537,12 +556,31 @@ class FileIngestor:
                 except Exception as e:
                     self.logger.error(f"Failed to ingest file {file_info['path']}: {e}")
                     if self.config.get("fail_fast", False):
-                        raise ProcessingError(f"Failed to ingest file: {e}")
+                        raise ProcessingError(f"Failed to ingest file: {e}") from e
+                    failed_files.append((file_info["path"], e))
 
+            # Surface partial failures to the caller via a warning so that
+            # downstream consumers are not silently handed an incomplete result.
+            if failed_files:
+                failed_paths = ", ".join(p for p, _ in failed_files)
+                warnings.warn(
+                    f"{len(failed_files)} of {total_files} file(s) could not be "
+                    f"ingested from '{directory_path}' and were skipped. "
+                    f"Successfully ingested: {len(file_objects)}. "
+                    f"Failed paths: {failed_paths}",
+                    PartialIngestionWarning,
+                    stacklevel=2,
+                )
+
+            status_message = (
+                f"Ingested {len(file_objects)}/{total_files} files"
+                if failed_files
+                else f"Ingested {len(file_objects)} files"
+            )
             self.progress_tracker.stop_tracking(
                 tracking_id,
                 status="completed",
-                message=f"Ingested {len(file_objects)} files",
+                message=status_message,
             )
             return file_objects
 
