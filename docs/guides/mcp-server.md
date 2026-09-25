@@ -6,7 +6,7 @@ icon: "plug"
 
 ## What Is MCP?
 
-MCP stands for the Model Context Protocol. It is an open standard that allows external AI assistants (like Claude Desktop, Cursor, or Windsurf) to securely access local tools and data sources.
+MCP stands for the Model Context Protocol. It is an open standard that allows external AI assistants (like Claude Desktop, Cursor, or Windsurf) to securely access local tools and data sources. 
 
 The Semantica MCP server exposes your knowledge graph as 15 callable tools. By connecting it, any compatible AI client can traverse the graph live, record decisions, run analytics, and export results during a conversation without custom tool wrappers.
 
@@ -335,3 +335,4 @@ The result is a fully auditable credit decision trail with precedent links, read
 - [Context Graphs](/guides/context-graphs): the graph that `add_entity` and `add_relationship` write to
 - [Export & Serialization](/guides/export): all export formats available via `export_graph`
 - [Ontology Management](/guides/ontology): generate OWL ontologies from the graph built via MCP
+

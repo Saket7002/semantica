@@ -197,3 +197,4 @@ def test_vocabulary_check_skipped_when_only_ontology_or_namespaces_provided():
     report_ns_only = verify_rdf(rdf, policed_namespaces=["https://example.org/"])
     assert not report_ns_only.vocabulary_checked
     assert report_ns_only.undeclared_terms == []
+

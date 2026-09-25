@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from semantica.utils.exceptions import ValidationError
+from semantica.utils.exceptions import ProcessingError, ValidationError
 from semantica.ingest.cassandra_ingestor import (
     CassandraConnector,
     CassandraData,
@@ -305,3 +305,119 @@ class TestCassandraIngestor:
         mock_session.execute.assert_called_once_with(
             "SELECT * FROM test.users LIMIT 10"
         )
+
+    @pytest.mark.parametrize("limit", [-1, 0, True, False, 1.5, "10"])
+    def test_ingest_table_invalid_limit_raises(self, limit):
+        connector = MagicMock()
+        connector.keyspace = "test"
+        ingestor = CassandraIngestor(connector=connector)
+        with pytest.raises(ValidationError, match="Limit must be a positive integer"):
+            ingestor.ingest_table("users", limit=limit)
+
+    def test_ingest_table_preserves_validation_error(self):
+        connector = MagicMock()
+        connector.keyspace = "test"
+        ingestor = CassandraIngestor(connector=connector)
+        with patch.object(
+            ingestor,
+            "get_table_schema",
+            side_effect=ValidationError("Table not found: test.users"),
+        ):
+            with pytest.raises(ValidationError, match="Table not found: test.users"):
+                ingestor.ingest_table("users")
+
+
+class TestCassandraConnectorEdgeCases:
+    """Tests for CassandraConnector connection lifecycle, auth, and cleanup."""
+
+    @patch("semantica.ingest.cassandra_ingestor.CASSANDRA_AVAILABLE", True)
+    def test_partial_credentials_raise_validation_error(self):
+        with pytest.raises(ValidationError, match="Cassandra credentials"):
+            CassandraConnector(username="admin")
+
+        with pytest.raises(ValidationError, match="Cassandra credentials"):
+            CassandraConnector(password="secret")
+
+    @patch("semantica.ingest.cassandra_ingestor.CASSANDRA_AVAILABLE", True)
+    def test_failed_connection_shuts_down_cluster(self):
+        mock_cluster_instance = MagicMock()
+        mock_cluster_instance.connect.side_effect = RuntimeError("cluster down")
+
+        fake_cluster_module = types.ModuleType("cassandra.cluster")
+        fake_cluster_module.Cluster = MagicMock(return_value=mock_cluster_instance)
+
+        with patch.dict(sys.modules, {"cassandra.cluster": fake_cluster_module}):
+            connector = CassandraConnector(hosts=["localhost"])
+            with pytest.raises(ProcessingError, match="Failed to connect to Cassandra"):
+                connector.connect()
+
+        mock_cluster_instance.shutdown.assert_called_once()
+        assert connector.cluster is None
+        assert connector.session is None
+
+    @patch("semantica.ingest.cassandra_ingestor.CASSANDRA_AVAILABLE", True)
+    def test_test_connection_preserves_live_session(self):
+        connector = CassandraConnector(hosts=["localhost"])
+        existing_session = MagicMock()
+        connector.session = existing_session
+
+        assert connector.test_connection() is True
+        existing_session.execute.assert_called_once_with(
+            "SELECT release_version FROM system.local"
+        )
+        assert connector.session == existing_session
+        existing_session.shutdown.assert_not_called()
+
+    @patch("semantica.ingest.cassandra_ingestor.CASSANDRA_AVAILABLE", True)
+    def test_test_connection_disconnects_transient_session(self):
+        mock_session = MagicMock()
+        mock_cluster_instance = MagicMock()
+        mock_cluster_instance.connect.return_value = mock_session
+
+        fake_cluster_module = types.ModuleType("cassandra.cluster")
+        fake_cluster_module.Cluster = MagicMock(return_value=mock_cluster_instance)
+
+        with patch.dict(sys.modules, {"cassandra.cluster": fake_cluster_module}):
+            connector = CassandraConnector(hosts=["localhost"])
+            assert connector.session is None
+            assert connector.test_connection() is True
+            mock_session.shutdown.assert_called_once()
+            mock_cluster_instance.shutdown.assert_called_once()
+            assert connector.session is None
+
+
+class TestCassandraPackageExports:
+    """Tests for semantica.ingest package exports and lazy loading."""
+
+    def test_all_contains_cassandra_symbols(self):
+        import semantica.ingest as pkg
+
+        for name in ("CassandraIngestor", "CassandraConnector", "CassandraData"):
+            assert name in pkg.__all__, f"{name} missing from __all__"
+
+    def test_cassandra_data_importable_without_driver(self):
+        from semantica.ingest import CassandraData
+
+        data = CassandraData(
+            data=[],
+            row_count=0,
+            columns=[],
+            keyspace="k",
+            table_name="t",
+            schema={},
+        )
+        assert data.row_count == 0
+
+    def test_lazy_import_without_dependency_raises_clear_error(self):
+        import semantica.ingest as pkg
+
+        with patch("semantica.ingest.cassandra_ingestor.CASSANDRA_AVAILABLE", False):
+            # Clear cached attribute on pkg if present
+            pkg.__dict__.pop("CassandraIngestor", None)
+            pkg.__dict__.pop("CassandraConnector", None)
+
+            with pytest.raises(ImportError, match="pip install 'semantica\\[db-cassandra\\]'"):
+                _ = pkg.CassandraIngestor
+
+            with pytest.raises(ImportError, match="pip install 'semantica\\[db-cassandra\\]'"):
+                _ = pkg.CassandraConnector

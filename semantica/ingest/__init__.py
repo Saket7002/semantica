@@ -432,6 +432,15 @@ def __getattr__(name: str) -> Any:
             if message:
                 raise ImportError(message)
 
+    if module_name == ".cassandra_ingestor" and name in {
+        "CassandraIngestor",
+        "CassandraConnector",
+    }:
+        if not getattr(module, "CASSANDRA_AVAILABLE", True):
+            message = _OPTIONAL_DEPENDENCY_MESSAGES.get(module_name)
+            if message:
+                raise ImportError(message)
+
     if module_name == ".bigquery_ingestor" and name in {
         "BigQueryIngestor",
         "BigQueryConnector",
@@ -553,6 +562,10 @@ __all__ = [
     "RedshiftIngestor",
     "RedshiftData",
     "RedshiftConnector",
+    # Cassandra ingestion
+    "CassandraIngestor",
+    "CassandraData",
+    "CassandraConnector",
     # Power BI ingestion
     "PowerBIIngestor",
     "PowerBIData",

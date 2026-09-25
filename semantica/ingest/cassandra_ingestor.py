@@ -57,6 +57,11 @@ class CassandraConnector:
 
         self.logger = get_logger("cassandra_connector")
 
+        if (username and not password) or (password and not username):
+            raise ValidationError(
+                "Cassandra credentials must include both username and password, or neither"
+            )
+
         self.hosts = hosts or ["127.0.0.1"]
         self.port = port
         self.username = username
@@ -99,6 +104,11 @@ class CassandraConnector:
             return self.session
 
         except Exception as exc:
+            if self.cluster is not None:
+                try:
+                    self.cluster.shutdown()
+                except Exception:
+                    pass
             self.cluster = None
             self.session = None
             self.logger.error(
@@ -131,6 +141,7 @@ class CassandraConnector:
 
     def test_connection(self) -> bool:
         """Test whether Cassandra is reachable."""
+        already_connected = self.session is not None
         try:
             session = self.connect()
             session.execute("SELECT release_version FROM system.local")
@@ -142,7 +153,8 @@ class CassandraConnector:
             )
             return False
         finally:
-            self.disconnect()
+            if not already_connected:
+                self.disconnect()
 
 def _validate_identifier(value: str, name: str) -> str:
     """Validate a Cassandra keyspace or table identifier."""
@@ -260,9 +272,9 @@ class CassandraIngestor:
         _validate_identifier(keyspace, "keyspace")
         _validate_identifier(table_name, "table name")
 
-        session = self.connector.connect()
-
         try:
+            session = self.connector.connect()
+
             schema = self.get_table_schema(
                 table_name=table_name,
                 keyspace=keyspace,
@@ -273,7 +285,11 @@ class CassandraIngestor:
             query = f"SELECT * FROM {keyspace}.{table_name}"
 
             if limit is not None:
-                query += f" LIMIT {int(limit)}"
+                if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+                    raise ValidationError(
+                        f"Limit must be a positive integer, got {limit!r}"
+                    )
+                query += f" LIMIT {limit}"
 
             result = session.execute(query)
 
@@ -292,6 +308,8 @@ class CassandraIngestor:
                 metadata={"query": query},
             )
 
+        except (ValidationError, ProcessingError):
+            raise
         except Exception as exc:
             self.logger.error(
                 "Failed to ingest Cassandra table: %s",
